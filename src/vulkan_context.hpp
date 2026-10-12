@@ -16,6 +16,8 @@ constexpr bool enableValidationLayers = false;
 constexpr bool enableValidationLayers = true;
 #endif
 
+constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
 const std::vector<char const*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
 };
@@ -28,10 +30,16 @@ public:
 
     VulkanContext(GLFWwindow* window);
 
-    void drawFrame();
+    enum class PipelineType 
+    {
+        Graphics,
+        Compute
+    };
+
+    void drawFrame(PipelineType type);
 
     void cleanup();
-
+    
 private:
     GLFWwindow* window_ = nullptr;
     vk::raii::Context  context_;             //vulkan.so/vulkan-1.dll loader. Inits ptrs to basic driver functions, which we are going to use
@@ -47,15 +55,26 @@ private:
     vk::Extent2D           swapChainExtent_;
     vk::PresentModeKHR     swapPresentMode_;
     std::vector<vk::raii::ImageView> swapChainImageViews_;
-    vk::raii::PipelineLayout pipelineLayout_ = nullptr;
+    std::vector<vk::raii::ImageView> storageImageViews_;
+    
+    vk::raii::PipelineLayout graphicsPipelineLayout_ = nullptr;
     vk::raii::Pipeline graphicsPipeline_ = nullptr;
+    vk::raii::PipelineLayout computePipelineLayout_ = nullptr;
+    vk::raii::Pipeline computePipeline_ = nullptr;
+
+    vk::raii::DescriptorSetLayout descriptorSetLayout_ = nullptr;
+
+    vk::raii::DescriptorPool descriptorPool_ = nullptr;
+    vk::raii::DescriptorSets descriptorSets_ = nullptr;
+
     uint32_t queueIndex_ = ~0;
     vk::raii::CommandPool commandPool_ = nullptr;
-    vk::raii::CommandBuffer commandBuffer_ = nullptr;
+    std::vector<vk::raii::CommandBuffer> commandBuffers_;
 
-    vk::raii::Semaphore presentCompleteSemaphore_ = nullptr;
-    vk::raii::Semaphore renderFinishedSemaphore_  = nullptr;
-    vk::raii::Fence     drawFence_                = nullptr;
+    std::vector<vk::raii::Semaphore> presentCompleteSemaphores_;
+    std::vector<vk::raii::Semaphore> renderFinishedSemaphores_;
+    std::vector<vk::raii::Fence>     inFlightFences_;
+    uint32_t frameIndex = 0;
 
     std::vector<const char*> requiredDeviceExtensions_ = {vk::KHRSwapchainExtensionName};
 
@@ -93,12 +112,16 @@ private:
     vk::PresentModeKHR chooseSwapPresentMode(std::vector<vk::PresentModeKHR> const &availablePresentModes);
     vk::Extent2D chooseSwapExtent(vk::SurfaceCapabilitiesKHR const &capabilities);
     void createImageViews();
+    void createStorageImageViews();
     void createGraphicsPipeline();
+    void createComputePipeline();
     [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>& code) const;
+    void createDescriptorSets();
     void createCommandPool();
-    void createCommandBuffer();
+    void createCommandBuffers();
     void createSyncObjects();
-    void recordCommandBuffer(uint32_t imageIndex);
+    void recordGraphicsPipelineCommandBuffer(uint32_t imageIndex);
+    void recordComputePipelineCommandBuffer(uint32_t imageIndex);
     void transition_image_layout(
             uint32_t                imageIndex,
             vk::ImageLayout         old_layout,
