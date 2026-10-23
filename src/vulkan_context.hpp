@@ -9,6 +9,9 @@
 #include <iostream>
 #include <ranges>
 #include <fstream>
+#include <cmath>
+
+#include "geometry/obj_loader.hpp"
 
 #ifdef NDEBUG
 constexpr bool enableValidationLayers = false;
@@ -38,6 +41,15 @@ public:
 
     void drawFrame(PipelineType type);
 
+    void uploadModel(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+
+    void createBuffer(
+        vk::DeviceSize size, 
+        vk::BufferUsageFlags usage, 
+        vk::MemoryPropertyFlags properties, 
+        vk::raii::Buffer& buffer, 
+        vk::raii::DeviceMemory& bufferMemory);
+
     void cleanup();
     
 private:
@@ -47,7 +59,7 @@ private:
     vk::raii::DebugUtilsMessengerEXT debugMessenger_ = nullptr;
     vk::raii::PhysicalDevice physicalDevice_ = nullptr;
     vk::raii::Device logicalDevice_ = nullptr;
-    vk::raii::Queue graphicsQueue_ = nullptr;
+    vk::raii::Queue graphicsAndComputeQueue_ = nullptr;
     vk::raii::SurfaceKHR surface_ = nullptr;
     vk::raii::SwapchainKHR swapChain_ = nullptr;
     std::vector<vk::Image> swapChainImages_;
@@ -67,7 +79,7 @@ private:
     vk::raii::DescriptorPool descriptorPool_ = nullptr;
     vk::raii::DescriptorSets descriptorSets_ = nullptr;
 
-    uint32_t queueIndex_ = ~0;
+    uint32_t queueIndex_ = ~0u;
     vk::raii::CommandPool commandPool_ = nullptr;
     std::vector<vk::raii::CommandBuffer> commandBuffers_;
 
@@ -76,7 +88,20 @@ private:
     std::vector<vk::raii::Fence>     inFlightFences_;
     uint32_t frameIndex = 0;
 
-    std::vector<const char*> requiredDeviceExtensions_ = {vk::KHRSwapchainExtensionName};
+    std::vector<vk::raii::Buffer> vertexBuffers_;
+    std::vector<vk::raii::DeviceMemory> vertexDeviceMemories_;
+    std::vector<vk::raii::Buffer> indexBuffers_;
+    std::vector<vk::raii::DeviceMemory> indexDeviceMemories_;
+
+
+    std::vector<const char*> requiredDeviceExtensions_ = 
+    {
+        vk::KHRSwapchainExtensionName,
+        vk::KHRAccelerationStructureExtensionName,
+        vk::KHRDeferredHostOperationsExtensionName,
+        vk::KHRBufferDeviceAddressExtensionName,
+        vk::KHRRayQueryExtensionName
+    };
 
     static std::vector<char> readFile(const std::string& filename) 
     {
@@ -132,4 +157,9 @@ private:
             vk::PipelineStageFlags2 dst_stage_mask);
 
     std::vector<const char*> getRequiredInstanceExtensions();
+
+    uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties);
+
+    vk::raii::CommandBuffer beginSingleTimeCommands();
+    void endSingleTimeCommands(vk::raii::CommandBuffer& commandBuffer);
 };

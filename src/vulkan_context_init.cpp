@@ -18,199 +18,161 @@ VulkanContext::VulkanContext(GLFWwindow* window) : window_(window)
     createSyncObjects();
 }
 
-void VulkanContext::drawFrame(PipelineType type)
+void VulkanContext::uploadModel(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
 {
-    auto fenceResult = logicalDevice_.waitForFences(*inFlightFences_[frameIndex], vk::True, UINT64_MAX);
-	if (fenceResult != vk::Result::eSuccess)
-	{
-		throw std::runtime_error("failed to wait for fence!");
-	}
-	logicalDevice_.resetFences(*inFlightFences_[frameIndex]);
+    vk::DeviceSize vertexSize = sizeof(Vertex) * vertices.size();
+    vk::DeviceSize indexSize  = sizeof(uint32_t) * indices.size();
+    vk::DeviceSize totalSize  = vertexSize + indexSize;
 
-    auto [result, imageIndex] = swapChain_.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores_[frameIndex], nullptr);
+    //create and fill the staging buffer
+    vk::raii::Buffer stagingBuffer = nullptr;
+    vk::raii::DeviceMemory stagingBufferMemory = nullptr;
+    
+    createBuffer(
+        totalSize, 
+        vk::BufferUsageFlagBits::eTransferSrc, // Source for copying
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, 
+        stagingBuffer, stagingBufferMemory
+    );
 
-    commandBuffers_[frameIndex].reset();
+    // Открываем шлюз: отображаем физический адрес GPU в обычный указатель C++
+    void* data = stagingBufferMemory.mapMemory(0, totalSize, {});
+    // Копируем вершины из ОЗУ в буфер
+    std::memcpy(data, vertices.data(), vertexSize); 
+    // Копируем индексы из ОЗУ, укладывая их в памяти строго ВСЛЕД за вершинами
+    std::memcpy(static_cast<char*>(data) + vertexSize, indices.data(), indexSize); 
+    // Закрываем шлюз
+    stagingBufferMemory.unmapMemory();
 
-    vk::PipelineStageFlags waitDestinationStageMask;
+    //Allocation of device local mem for our data
+    vk::raii::Buffer vertexBufferTemp = nullptr;
+    vk::raii::DeviceMemory vertexBufferMemoryTemp = nullptr;
+    createBuffer(
+        vertexSize,
+        vk::BufferUsageFlagBits::eTransferDst | 
+        vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,//vk::BufferUsageFlagBits::eVertexBuffer for rasterization
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        vertexBufferTemp, vertexBufferMemoryTemp
+    );
 
-    switch(type)
-    {
-        case PipelineType::Graphics:
-            recordGraphicsPipelineCommandBuffer(imageIndex);
-            waitDestinationStageMask = ( vk::PipelineStageFlagBits::eColorAttachmentOutput );
-            break;
-        case PipelineType::Compute:
-            recordComputePipelineCommandBuffer(imageIndex);
-            waitDestinationStageMask = ( vk::PipelineStageFlagBits::eComputeShader );
-            break;
-    }
+    vk::raii::Buffer indexBufferTemp = nullptr;
+    vk::raii::DeviceMemory indexBufferMemoryTemp = nullptr;
+    createBuffer(
+        indexSize,
+        vk::BufferUsageFlagBits::eTransferDst | 
+        vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,// vk::BufferUsageFlagBits::eIndexBuffer for rasterization
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        indexBufferTemp, indexBufferMemoryTemp
+    );
 
-    const vk::SubmitInfo   submitInfo
-    {
-        .waitSemaphoreCount   = 1,
-        .pWaitSemaphores      = &*presentCompleteSemaphores_[frameIndex],
-        .pWaitDstStageMask    = &waitDestinationStageMask,
-        .commandBufferCount   = 1,
-        .pCommandBuffers      = &*commandBuffers_[frameIndex],
-        .signalSemaphoreCount = 1,
-        .pSignalSemaphores    = &*renderFinishedSemaphores_[imageIndex]
+    vk::raii::CommandBuffer cmd = beginSingleTimeCommands(); 
+
+    // cmd: copy from stagingBuffer ---> to vertexBufferTemp
+    vk::BufferCopy vertexCopyRegion{ .srcOffset = 0, .dstOffset = 0, .size = vertexSize };
+    cmd.copyBuffer(*stagingBuffer, *vertexBufferTemp, vertexCopyRegion);
+
+    // same logic
+    vk::BufferCopy indexCopyRegion{ .srcOffset = vertexSize, .dstOffset = 0, .size = indexSize };
+    cmd.copyBuffer(*stagingBuffer, *indexBufferTemp, indexCopyRegion);
+
+    endSingleTimeCommands(cmd); 
+
+    vertexBuffers_.push_back(std::move(vertexBufferTemp));
+    vertexDeviceMemories_.push_back(std::move(vertexBufferMemoryTemp));
+    indexBuffers_.push_back(std::move(indexBufferTemp));
+    indexDeviceMemories_.push_back(std::move(indexBufferMemoryTemp));
+    
+    std::cout << "Data transferred to Device Local VRAM successfully." << std::endl;
+}
+
+vk::raii::CommandBuffer VulkanContext::beginSingleTimeCommands()
+{
+    vk::CommandBufferAllocateInfo allocInfo{
+        .commandPool        = *commandPool_,
+        .level              = vk::CommandBufferLevel::ePrimary, // Главный буфер
+        .commandBufferCount = 1
     };
 
-    graphicsQueue_.submit(submitInfo, *inFlightFences_[frameIndex]);
+    vk::raii::CommandBuffers commandBuffers(logicalDevice_, allocInfo);
+    vk::raii::CommandBuffer commandBuffer = std::move(commandBuffers[0]);
 
-    const vk::PresentInfoKHR presentInfoKHR{.waitSemaphoreCount = 1, .pWaitSemaphores = &*renderFinishedSemaphores_[imageIndex], .swapchainCount = 1, .pSwapchains = &*swapChain_, .pImageIndices = &imageIndex};
-	result = graphicsQueue_.presentKHR(presentInfoKHR);
-	switch (result)
-	{
-		case vk::Result::eSuccess:
-			break;
-		case vk::Result::eSuboptimalKHR:
-			std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
-			break;
-		default:
-			break;        // an unexpected result is returned!
-	}
+    vk::CommandBufferBeginInfo beginInfo{
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    };
+    commandBuffer.begin(beginInfo);
 
-    frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
+    return commandBuffer;
+}
+
+void VulkanContext::endSingleTimeCommands(vk::raii::CommandBuffer& commandBuffer)
+{
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo{
+        .commandBufferCount = 1,
+        .pCommandBuffers    = &*commandBuffer
+    };
+
+    graphicsAndComputeQueue_.submit(submitInfo, nullptr);
+    graphicsAndComputeQueue_.waitIdle(); 
+}
+
+void VulkanContext::createBuffer(
+    vk::DeviceSize size, 
+    vk::BufferUsageFlags usage, 
+    vk::MemoryPropertyFlags properties, 
+    vk::raii::Buffer& buffer, 
+    vk::raii::DeviceMemory& bufferMemory)
+{
+    vk::BufferCreateInfo bufferInfo{
+        .size        = size,
+        .usage       = usage,
+        .sharingMode = vk::SharingMode::eExclusive
+    };
+    
+    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
+        vk::BufferDeviceAddressInfo bdai{}; // Для Vulkan 1.2+
+    }
+
+    buffer = vk::raii::Buffer(logicalDevice_, bufferInfo);
+
+    vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+
+    vk::MemoryAllocateInfo allocInfo{
+        .allocationSize  = memRequirements.size,
+        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
+    };
+
+    vk::MemoryAllocateFlagsInfo allocFlagsInfo;
+    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
+        allocFlagsInfo.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
+        allocInfo.pNext = &allocFlagsInfo;
+    }
+
+    bufferMemory = vk::raii::DeviceMemory(logicalDevice_, allocInfo);
+
+    buffer.bindMemory(*bufferMemory, 0);
+}
+
+uint32_t VulkanContext::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
+{
+    vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice_.getMemoryProperties();
+
+    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+    {
+        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+        {
+            return i;
+        }
+    }
+
+    throw std::runtime_error("failed to find suitable memory type!");
 }
 
 void VulkanContext::cleanup()
 {
     logicalDevice_.waitIdle();
 }
-
-void VulkanContext::recordGraphicsPipelineCommandBuffer(uint32_t imageIndex)
-{
-    auto &commandBuffer = commandBuffers_[frameIndex];
-
-	commandBuffer.begin({});
-
-	// Before starting rendering, transition the swapchain image to vk::ImageLayout::eColorAttachmentOptimal
-	transition_image_layout(
-	    imageIndex,
-	    vk::ImageLayout::eUndefined,
-	    vk::ImageLayout::eColorAttachmentOptimal,
-	    {},                                                        // srcAccessMask (no need to wait for previous operations)
-	    vk::AccessFlagBits2::eColorAttachmentWrite,                // dstAccessMask
-	    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // srcStage
-	    vk::PipelineStageFlagBits2::eColorAttachmentOutput         // dstStage
-	);
-	vk::ClearValue              clearColor     = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
-	vk::RenderingAttachmentInfo attachmentInfo = {
-	    .imageView   = swapChainImageViews_[imageIndex],
-	    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-	    .loadOp      = vk::AttachmentLoadOp::eClear,
-	    .storeOp     = vk::AttachmentStoreOp::eStore,
-	    .clearValue  = clearColor};
-	vk::RenderingInfo renderingInfo = {
-	    .renderArea           = {.offset = {0, 0}, .extent = swapChainExtent_},
-	    .layerCount           = 1,
-	    .colorAttachmentCount = 1,
-	    .pColorAttachments    = &attachmentInfo};
-
-	commandBuffer.beginRendering(renderingInfo);
-	commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline_);
-	commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width), static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
-	commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
-	commandBuffer.draw(3, 1, 0, 0);
-	commandBuffer.endRendering();
-
-		// After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
-	transition_image_layout(
-	    imageIndex,
-	    vk::ImageLayout::eColorAttachmentOptimal,
-	    vk::ImageLayout::ePresentSrcKHR,
-	    vk::AccessFlagBits2::eColorAttachmentWrite,                // srcAccessMask
-	    {},                                                        // dstAccessMask
-	    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // srcStage
-	    vk::PipelineStageFlagBits2::eBottomOfPipe                  // dstStage
-	);
-	commandBuffer.end();
-}
-
-void VulkanContext::transition_image_layout(
-    uint32_t                imageIndex,
-    vk::ImageLayout         old_layout,
-    vk::ImageLayout         new_layout,
-    vk::AccessFlags2        src_access_mask,
-    vk::AccessFlags2        dst_access_mask,
-    vk::PipelineStageFlags2 src_stage_mask,
-    vk::PipelineStageFlags2 dst_stage_mask)
-{
-	vk::ImageMemoryBarrier2 barrier = 
-    {
-	    .srcStageMask        = src_stage_mask,
-	    .srcAccessMask       = src_access_mask,
-	    .dstStageMask        = dst_stage_mask,
-	    .dstAccessMask       = dst_access_mask,
-	    .oldLayout           = old_layout,
-	    .newLayout           = new_layout,
-	    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-	    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-	    .image               = swapChainImages_[imageIndex],
-	    .subresourceRange    = 
-        {
-	        .aspectMask     = vk::ImageAspectFlagBits::eColor,
-	        .baseMipLevel   = 0,
-	        .levelCount     = 1,
-	        .baseArrayLayer = 0,
-	        .layerCount     = 1}
-    };
-	vk::DependencyInfo dependency_info = 
-    {
-	    .dependencyFlags         = {},
-	    .imageMemoryBarrierCount = 1,
-	    .pImageMemoryBarriers    = &barrier
-    };
-
-    auto &commandBuffer = commandBuffers_[frameIndex];
-
-    commandBuffer.pipelineBarrier2(dependency_info);
-}
-
-void VulkanContext::recordComputePipelineCommandBuffer(uint32_t imageIndex)
-{
-    auto &commandBuffer = commandBuffers_[frameIndex];
-
-    commandBuffer.begin({});
-
-    transition_image_layout(
-        imageIndex,
-        vk::ImageLayout::eUndefined,                               // we don't care about previous result
-        vk::ImageLayout::eGeneral,                                 // to RWTexture2D
-        {},                                                        // wait nothing
-        vk::AccessFlagBits2::eShaderStorageWrite,                  // want to write in a compute shader
-        vk::PipelineStageFlagBits2::eComputeShader,                // srcStage
-        vk::PipelineStageFlagBits2::eComputeShader                 // dstStage
-    );
-
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *computePipeline_);
-
-    commandBuffer.bindDescriptorSets(
-        vk::PipelineBindPoint::eCompute, 
-        *computePipelineLayout_,
-        0,                               
-        *descriptorSets_[imageIndex],
-        nullptr
-    );
-
-    commandBuffer.dispatch(800 / 16, 600 / 16, 1); //TODO : RAPLACE BY A CONSTANT VAL
-
-    // to ePresentSrcKHR
-    transition_image_layout(
-        imageIndex,
-        vk::ImageLayout::eGeneral,                                 // from RWTexture2D
-        vk::ImageLayout::ePresentSrcKHR,                           // to present mode
-        vk::AccessFlagBits2::eShaderStorageWrite,                  // cache flushes to VRAM
-        {},                                                        
-        vk::PipelineStageFlagBits2::eComputeShader,                // gpu wait until Compute shader finish it's work
-        vk::PipelineStageFlagBits2::eBottomOfPipe
-    );
-
-    commandBuffer.end();
-}
-
-
 
 void VulkanContext::createInstance() 
 {
@@ -448,7 +410,7 @@ void VulkanContext::createLogicalDevice()
 
     for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++)
     {
-        if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) &&
+        if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) && (queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eCompute) &&
             physicalDevice_.getSurfaceSupportKHR(qfpIndex, *surface_))
         {
             // found a queue family that supports both graphics and present
@@ -500,7 +462,7 @@ void VulkanContext::createLogicalDevice()
     };
 
     logicalDevice_ = vk::raii::Device(physicalDevice_, deviceCreateInfo);
-    graphicsQueue_ = vk::raii::Queue(logicalDevice_, queueIndex_, 0);
+    graphicsAndComputeQueue_ = vk::raii::Queue(logicalDevice_, queueIndex_, 0);
 }
 
 void VulkanContext::createSwapChain()
@@ -929,3 +891,4 @@ void VulkanContext::createSyncObjects()
 		inFlightFences_.emplace_back(logicalDevice_, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
 	}
 }
+

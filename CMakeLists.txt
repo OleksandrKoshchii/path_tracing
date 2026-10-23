@@ -85,7 +85,10 @@ set(SHADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 
 set(PROJECT_SOURCES
     "${SRC_DIR}/main.cpp"
-    "${SRC_DIR}/vulkan_context.cpp"
+    "${SRC_DIR}/path_tracer.cpp"
+    "${SRC_DIR}/vulkan_context_init.cpp"
+    "${SRC_DIR}/vulkan_context_loop.cpp"
+    "${SRC_DIR}/geometry/obj_loader.cpp"
 )
 
 
