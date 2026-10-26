@@ -88,7 +88,9 @@ set(PROJECT_SOURCES
     "${SRC_DIR}/path_tracer.cpp"
     "${SRC_DIR}/vulkan_context_init.cpp"
     "${SRC_DIR}/vulkan_context_loop.cpp"
+    "${SRC_DIR}/vulkan_context_models_upload.cpp"
     "${SRC_DIR}/geometry/obj_loader.cpp"
+    "${SRC_DIR}/scene/scene.cpp"
 )
 
 

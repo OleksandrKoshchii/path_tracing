@@ -15,24 +15,31 @@
 
 #include <iostream>
 
+#include "constants.hpp"
 #include "vulkan_context.hpp"
 #include "geometry/obj_loader.hpp"
-
-constexpr uint32_t WIDTH = 800;
-constexpr uint32_t HEIGHT = 600;
+#include "scene/scene.hpp"
+#include "input_info.hpp"
 
 class PathTracer 
 {
 public:
     void run(); 
-
-
 private:
     GLFWwindow* window_ = nullptr;
+    VulkanContext vkContext;
+    Scene scene;
+    InputInfo inputInfo;
 
 	void initWindow();
 
     void mainLoop(auto &vkContext); 
 
     void cleanup(auto &vkContext);
+
+    void update(float deltaTime);
+
+    void processInput(float deltaTime);
+
+    void fixedUpdate(float deltaTime);
 };

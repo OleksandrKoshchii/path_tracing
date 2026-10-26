@@ -1,5 +1,6 @@
 #pragma once
 
+#define VK_VERSION_1_3 1
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS 
 #define GLFW_INCLUDE_VULKAN
 
@@ -10,16 +11,20 @@
 #include <ranges>
 #include <fstream>
 #include <cmath>
+#include <unordered_map>
+#include <glm/gtc/matrix_transform.hpp>
 
+#include "constants.hpp"
 #include "geometry/obj_loader.hpp"
+#include "geometry/vk_context_scene_object.hpp"
+#include "geometry/mesh.hpp"
+#include "scene/scene.hpp"
 
 #ifdef NDEBUG
 constexpr bool enableValidationLayers = false;
 #else
 constexpr bool enableValidationLayers = true;
 #endif
-
-constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<char const*> validationLayers = {
     "VK_LAYER_KHRONOS_validation"
@@ -28,8 +33,7 @@ const std::vector<char const*> validationLayers = {
 class VulkanContext
 {
 public:
-
-    VulkanContext() = delete;
+    VulkanContext() {}
 
     VulkanContext(GLFWwindow* window);
 
@@ -41,17 +45,9 @@ public:
 
     void drawFrame(PipelineType type);
 
-    void uploadModel(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
-
-    void createBuffer(
-        vk::DeviceSize size, 
-        vk::BufferUsageFlags usage, 
-        vk::MemoryPropertyFlags properties, 
-        vk::raii::Buffer& buffer, 
-        vk::raii::DeviceMemory& bufferMemory);
+    void update(Scene& scene);
 
     void cleanup();
-    
 private:
     GLFWwindow* window_ = nullptr;
     vk::raii::Context  context_;             //vulkan.so/vulkan-1.dll loader. Inits ptrs to basic driver functions, which we are going to use
@@ -88,20 +84,50 @@ private:
     std::vector<vk::raii::Fence>     inFlightFences_;
     uint32_t frameIndex = 0;
 
-    std::vector<vk::raii::Buffer> vertexBuffers_;
-    std::vector<vk::raii::DeviceMemory> vertexDeviceMemories_;
-    std::vector<vk::raii::Buffer> indexBuffers_;
-    std::vector<vk::raii::DeviceMemory> indexDeviceMemories_;
-
-
     std::vector<const char*> requiredDeviceExtensions_ = 
     {
         vk::KHRSwapchainExtensionName,
         vk::KHRAccelerationStructureExtensionName,
         vk::KHRDeferredHostOperationsExtensionName,
-        vk::KHRBufferDeviceAddressExtensionName,
         vk::KHRRayQueryExtensionName
     };
+
+
+    //#####################################################
+    //#      THERE ARE SCENE DEPENDENT OBJECTS BELOW      #
+    //#####################################################
+
+    //###################################################
+    //#      ALLOCATED BUFFERS(VERTICES, INDICES)       #
+    //###################################################
+    std::vector<vk::raii::Buffer> vertexBuffers_;
+    std::vector<vk::raii::DeviceMemory> vertexDeviceMemories_;
+    std::vector<vk::raii::Buffer> indexBuffers_;
+    std::vector<vk::raii::DeviceMemory> indexDeviceMemories_;
+    std::vector<MeshInfo> meshInfos_;
+
+    
+    //####################
+    //#       BLAS       #
+    //####################
+    std::vector<vk::raii::Buffer> blasBuffers_;
+    std::vector<vk::raii::DeviceMemory> blasMemories_;
+    std::vector<vk::raii::AccelerationStructureKHR> blasHandles_;
+    std::unordered_map<std::string_view, uint32_t> modelNameToBlasIndex_;
+
+    
+    //##################################
+    //#       TLAS AND INSTANCES       #
+    //##################################   
+    std::vector<vkContextSceneObject> sceneObjects_;
+    std::vector<vk::AccelerationStructureInstanceKHR> instances_;
+    vk::raii::Buffer instancesBuffer_ = nullptr;
+    vk::raii::DeviceMemory instancesMemory_ = nullptr;
+    vk::raii::Buffer tlasBuffer_ = nullptr;
+    vk::raii::DeviceMemory tlasMemory_ = nullptr;
+    vk::raii::AccelerationStructureKHR tlasHandle_ = nullptr;
+
+    Camera camera;
 
     static std::vector<char> readFile(const std::string& filename) 
     {
@@ -162,4 +188,29 @@ private:
 
     vk::raii::CommandBuffer beginSingleTimeCommands();
     void endSingleTimeCommands(vk::raii::CommandBuffer& commandBuffer);
+
+    void createBLAS(
+        vk::raii::Buffer &vertexBuffer,
+        vk::raii::Buffer &indexBuffer, 
+        MeshInfo &meshInfo, 
+        vk::raii::CommandBuffer &cmd,
+        std::vector<vk::raii::Buffer> &tempScratchBuffers,
+        std::vector<vk::raii::DeviceMemory> &tempScratchMemories
+    );
+    void createInstances();
+
+    void uploadModel(std::string &name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+
+    void createBuffer(
+        vk::DeviceSize size, 
+        vk::BufferUsageFlags usage, 
+        vk::MemoryPropertyFlags properties, 
+        vk::raii::Buffer& buffer, 
+        vk::raii::DeviceMemory& bufferMemory);
+
+    void createTLAS();
+
+    void createBLASes();
+
+    void createSceneObjects();
 };

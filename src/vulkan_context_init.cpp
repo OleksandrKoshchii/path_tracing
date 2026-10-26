@@ -12,84 +12,46 @@ VulkanContext::VulkanContext(GLFWwindow* window) : window_(window)
     createStorageImageViews();
     createGraphicsPipeline();
     createComputePipeline();
-    createDescriptorSets();
     createCommandPool();
     createCommandBuffers();
+
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+
+    std::string model1 = "assets/cube.obj";
+    loadObjFile(model1, vertices, indices);
+    uploadModel(model1, vertices, indices);
+
+    vertices.clear();
+    indices.clear();
+
+    std::string model2 = "assets/monkey.obj";
+    loadObjFile(model2, vertices, indices);
+    uploadModel(model2, vertices, indices);
+
+    vertices.clear();
+    indices.clear();
+
+    std::string model3 = "assets/doom.obj";
+    loadObjFile(model3, vertices, indices);
+    uploadModel(model3, vertices, indices);
+
+    camera.height = HEIGHT;
+    camera.width  = WIDTH;
+
+
+    createBLASes();
+    createSceneObjects();
+    createTLAS();
+    createDescriptorSets();
     createSyncObjects();
-}
-
-void VulkanContext::uploadModel(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
-{
-    vk::DeviceSize vertexSize = sizeof(Vertex) * vertices.size();
-    vk::DeviceSize indexSize  = sizeof(uint32_t) * indices.size();
-    vk::DeviceSize totalSize  = vertexSize + indexSize;
-
-    //create and fill the staging buffer
-    vk::raii::Buffer stagingBuffer = nullptr;
-    vk::raii::DeviceMemory stagingBufferMemory = nullptr;
-    
-    createBuffer(
-        totalSize, 
-        vk::BufferUsageFlagBits::eTransferSrc, // Source for copying
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, 
-        stagingBuffer, stagingBufferMemory
-    );
-
-    // Открываем шлюз: отображаем физический адрес GPU в обычный указатель C++
-    void* data = stagingBufferMemory.mapMemory(0, totalSize, {});
-    // Копируем вершины из ОЗУ в буфер
-    std::memcpy(data, vertices.data(), vertexSize); 
-    // Копируем индексы из ОЗУ, укладывая их в памяти строго ВСЛЕД за вершинами
-    std::memcpy(static_cast<char*>(data) + vertexSize, indices.data(), indexSize); 
-    // Закрываем шлюз
-    stagingBufferMemory.unmapMemory();
-
-    //Allocation of device local mem for our data
-    vk::raii::Buffer vertexBufferTemp = nullptr;
-    vk::raii::DeviceMemory vertexBufferMemoryTemp = nullptr;
-    createBuffer(
-        vertexSize,
-        vk::BufferUsageFlagBits::eTransferDst | 
-        vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,//vk::BufferUsageFlagBits::eVertexBuffer for rasterization
-        vk::MemoryPropertyFlagBits::eDeviceLocal,
-        vertexBufferTemp, vertexBufferMemoryTemp
-    );
-
-    vk::raii::Buffer indexBufferTemp = nullptr;
-    vk::raii::DeviceMemory indexBufferMemoryTemp = nullptr;
-    createBuffer(
-        indexSize,
-        vk::BufferUsageFlagBits::eTransferDst | 
-        vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,// vk::BufferUsageFlagBits::eIndexBuffer for rasterization
-        vk::MemoryPropertyFlagBits::eDeviceLocal,
-        indexBufferTemp, indexBufferMemoryTemp
-    );
-
-    vk::raii::CommandBuffer cmd = beginSingleTimeCommands(); 
-
-    // cmd: copy from stagingBuffer ---> to vertexBufferTemp
-    vk::BufferCopy vertexCopyRegion{ .srcOffset = 0, .dstOffset = 0, .size = vertexSize };
-    cmd.copyBuffer(*stagingBuffer, *vertexBufferTemp, vertexCopyRegion);
-
-    // same logic
-    vk::BufferCopy indexCopyRegion{ .srcOffset = vertexSize, .dstOffset = 0, .size = indexSize };
-    cmd.copyBuffer(*stagingBuffer, *indexBufferTemp, indexCopyRegion);
-
-    endSingleTimeCommands(cmd); 
-
-    vertexBuffers_.push_back(std::move(vertexBufferTemp));
-    vertexDeviceMemories_.push_back(std::move(vertexBufferMemoryTemp));
-    indexBuffers_.push_back(std::move(indexBufferTemp));
-    indexDeviceMemories_.push_back(std::move(indexBufferMemoryTemp));
-    
-    std::cout << "Data transferred to Device Local VRAM successfully." << std::endl;
 }
 
 vk::raii::CommandBuffer VulkanContext::beginSingleTimeCommands()
 {
     vk::CommandBufferAllocateInfo allocInfo{
         .commandPool        = *commandPool_,
-        .level              = vk::CommandBufferLevel::ePrimary, // Главный буфер
+        .level              = vk::CommandBufferLevel::ePrimary,
         .commandBufferCount = 1
     };
 
@@ -115,58 +77,6 @@ void VulkanContext::endSingleTimeCommands(vk::raii::CommandBuffer& commandBuffer
 
     graphicsAndComputeQueue_.submit(submitInfo, nullptr);
     graphicsAndComputeQueue_.waitIdle(); 
-}
-
-void VulkanContext::createBuffer(
-    vk::DeviceSize size, 
-    vk::BufferUsageFlags usage, 
-    vk::MemoryPropertyFlags properties, 
-    vk::raii::Buffer& buffer, 
-    vk::raii::DeviceMemory& bufferMemory)
-{
-    vk::BufferCreateInfo bufferInfo{
-        .size        = size,
-        .usage       = usage,
-        .sharingMode = vk::SharingMode::eExclusive
-    };
-    
-    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
-        vk::BufferDeviceAddressInfo bdai{}; // Для Vulkan 1.2+
-    }
-
-    buffer = vk::raii::Buffer(logicalDevice_, bufferInfo);
-
-    vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
-
-    vk::MemoryAllocateInfo allocInfo{
-        .allocationSize  = memRequirements.size,
-        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)
-    };
-
-    vk::MemoryAllocateFlagsInfo allocFlagsInfo;
-    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
-        allocFlagsInfo.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
-        allocInfo.pNext = &allocFlagsInfo;
-    }
-
-    bufferMemory = vk::raii::DeviceMemory(logicalDevice_, allocInfo);
-
-    buffer.bindMemory(*bufferMemory, 0);
-}
-
-uint32_t VulkanContext::findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
-{
-    vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice_.getMemoryProperties();
-
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
-    {
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
-        {
-            return i;
-        }
-    }
-
-    throw std::runtime_error("failed to find suitable memory type!");
 }
 
 void VulkanContext::cleanup()
@@ -742,28 +652,53 @@ void VulkanContext::createComputePipeline()
         .pName = "main" 
     };
 
-    vk::DescriptorSetLayoutBinding binding
-    {
-        .binding            = 1,
-        .descriptorType     = vk::DescriptorType::eStorageImage,
-        .descriptorCount    = 1,
-        .stageFlags         = vk::ShaderStageFlagBits::eCompute,
-        .pImmutableSamplers = nullptr
-    };
+    std::vector<vk::DescriptorSetLayoutBinding> bindings;
+
+    bindings.emplace_back
+    (
+        vk::DescriptorSetLayoutBinding
+        {
+            .binding            = 0,
+            .descriptorType     = vk::DescriptorType::eAccelerationStructureKHR,
+            .descriptorCount    = 1,
+            .stageFlags         = vk::ShaderStageFlagBits::eCompute,
+            .pImmutableSamplers = nullptr
+        }
+    );
+
+    bindings.emplace_back
+    (
+        vk::DescriptorSetLayoutBinding
+        {
+            .binding            = 1,
+            .descriptorType     = vk::DescriptorType::eStorageImage,
+            .descriptorCount    = 1,
+            .stageFlags         = vk::ShaderStageFlagBits::eCompute,
+            .pImmutableSamplers = nullptr
+        }
+    );
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo
     {
-        .bindingCount = 1,
-        .pBindings    = &binding
+        .bindingCount = 2,
+        .pBindings    = bindings.data()
     };
 
     descriptorSetLayout_ = vk::raii::DescriptorSetLayout(logicalDevice_, layoutInfo);
+
+    vk::PushConstantRange pushConstantsRange
+    {
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .offset     = 0,
+        .size       = sizeof(Camera) 
+    };
 
     vk::PipelineLayoutCreateInfo computePipelineLayoutInfo
     {
         .setLayoutCount         = 1,
         .pSetLayouts            = &*descriptorSetLayout_, 
-        .pushConstantRangeCount = 0
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges    = &pushConstantsRange
     };
 
     computePipelineLayout_ = vk::raii::PipelineLayout(logicalDevice_, computePipelineLayoutInfo); 
@@ -800,15 +735,32 @@ void VulkanContext::createComputePipeline()
 void VulkanContext::createDescriptorSets()
 {
     // 3 descriptors for images from our swapchain
-    vk::DescriptorPoolSize poolSize{
-        .type            = vk::DescriptorType::eStorageImage,
-        .descriptorCount = 3 
-    };
+
+    std::vector<vk::DescriptorPoolSize> poolSizes;
+
+    poolSizes.emplace_back
+    (
+        vk::DescriptorPoolSize
+        {
+            .type            = vk::DescriptorType::eStorageImage,
+            .descriptorCount = 3
+        }  
+    );
+
+    poolSizes.emplace_back
+    (
+        vk::DescriptorPoolSize
+        {
+            .type            = vk::DescriptorType::eAccelerationStructureKHR,
+            .descriptorCount = 3
+        }  
+    );
 
     vk::DescriptorPoolCreateInfo poolInfo{
+        .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
         .maxSets       = 3,
-        .poolSizeCount = 1,
-        .pPoolSizes    = &poolSize
+        .poolSizeCount = 2,
+        .pPoolSizes    = poolSizes.data()
     };
     descriptorPool_ = vk::raii::DescriptorPool(logicalDevice_, poolInfo);
 
@@ -823,6 +775,20 @@ void VulkanContext::createDescriptorSets()
 
     for (uint32_t i = 0; i < 3; ++i)
     {
+        vk::WriteDescriptorSetAccelerationStructureKHR asInfo{
+            .accelerationStructureCount = 1,
+            .pAccelerationStructures    = &*tlasHandle_
+        };
+
+        vk::WriteDescriptorSet tlasWrite{
+            .pNext           = &asInfo,
+            .dstSet          = *descriptorSets_[i],
+            .dstBinding      = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType  = vk::DescriptorType::eAccelerationStructureKHR
+        };
+
         vk::DescriptorImageInfo imageInfo{
             .sampler     = nullptr,
             .imageView   = *storageImageViews_[i],
@@ -830,7 +796,7 @@ void VulkanContext::createDescriptorSets()
         };
 
 
-        vk::WriteDescriptorSet descriptorWrite{
+        vk::WriteDescriptorSet storageImageWrite{
             .dstSet          = *descriptorSets_[i],
             .dstBinding      = 1,
             .dstArrayElement = 0,
@@ -839,7 +805,9 @@ void VulkanContext::createDescriptorSets()
             .pImageInfo      = &imageInfo 
         };
 
-        logicalDevice_.updateDescriptorSets(descriptorWrite, nullptr);
+        vk::WriteDescriptorSet writes[] = { tlasWrite, storageImageWrite };
+
+        logicalDevice_.updateDescriptorSets(writes, nullptr);
     }
 }
 

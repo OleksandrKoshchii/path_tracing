@@ -3,24 +3,7 @@
 void PathTracer::run()
 {
     initWindow();
-    VulkanContext vkContext(window_);
-
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    loadObjFile("assets/cube.obj", vertices, indices);
-
-    for(Vertex &v : vertices)
-    {
-        std::cout << "v x:" << v.pos.x << " y:" << v.pos.y << " z:" << v.pos.z << "\n";
-    }
-
-    for(uint32_t i : indices)
-    {
-        std::cout << "i:" << i << "\n";
-    }
-
-    vkContext.uploadModel(vertices, indices);
-
+    vkContext = VulkanContext(window_);
     mainLoop(vkContext);
     cleanup(vkContext);
 }
@@ -33,15 +16,89 @@ void PathTracer::initWindow()
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
 	window_ = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+
+    glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+    glfwGetCursorPos(window_, &inputInfo.lastMouseX, &inputInfo.lastMouseY);
 }
 
 void PathTracer::mainLoop(auto &vkContext)
 {
+    double lastTime = glfwGetTime();
+    double accumulator = 0.0;   
+
+    const double fixedDeltaTime = 1/60.f; 
+
     while (!glfwWindowShouldClose(window_)) 
     {
         glfwPollEvents();
+
+        double currentTime = glfwGetTime();
+        double deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+
+        if (deltaTime > 0.25) deltaTime = 0.25; 
+
+        while (accumulator >= fixedDeltaTime)
+        {
+            fixedUpdate(static_cast<float>(fixedDeltaTime)); 
+            
+            accumulator -= fixedDeltaTime;
+        }
+
+        update(static_cast<float>(deltaTime));        
+
         vkContext.drawFrame(VulkanContext::PipelineType::Compute);
     }
+}
+
+void PathTracer::fixedUpdate(float deltaTime)
+{
+
+}
+
+void PathTracer::update(float deltaTime)
+{
+    processInput(deltaTime);
+}
+
+void PathTracer::processInput(float deltaTime)
+{
+    glfwGetCursorPos(window_, &inputInfo.mouseX, &inputInfo.mouseY);
+    inputInfo.deltaMouseX = inputInfo.mouseX - inputInfo.lastMouseX;
+    inputInfo.deltaMouseY = inputInfo.mouseY - inputInfo.lastMouseY;
+
+    glm::vec3 deltaPos{0.f, 0.f, 0.f};
+
+    auto camInfo = scene.getCameraInfo();
+
+    glm::vec3 forward = camInfo.dirForward;
+    glm::vec3 right = glm::cross(camInfo.dirForward, camInfo.dirUp);
+    float speed = camInfo.speed;
+
+    if(glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS)
+    {
+        deltaPos += forward * speed * deltaTime;
+    }
+    if(glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS)
+    {
+        deltaPos -= forward * speed * deltaTime;
+    }
+    if(glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS)
+    {
+        deltaPos += right * speed * deltaTime;
+    }
+    if(glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS)
+    {
+        deltaPos -= right * speed * deltaTime;
+    }
+
+    scene.updateCamInfo(inputInfo.deltaMouseX, inputInfo.deltaMouseY, deltaPos);
+
+    vkContext.update(scene);
+
+    inputInfo.lastMouseX = inputInfo.mouseX;
+    inputInfo.lastMouseY = inputInfo.mouseY;
 }
 
 void PathTracer::cleanup(auto &vkContext)

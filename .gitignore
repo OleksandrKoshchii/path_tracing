@@ -1,4 +1,5 @@
 glfw/
 build/
 .vscode/
+assets/
 tiny_obj_loader.h

@@ -92,7 +92,7 @@ void VulkanContext::recordGraphicsPipelineCommandBuffer(uint32_t imageIndex)
 	commandBuffer.draw(3, 1, 0, 0);
 	commandBuffer.endRendering();
 
-		// After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
+	// After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
 	transition_image_layout(
 	    imageIndex,
 	    vk::ImageLayout::eColorAttachmentOptimal,
@@ -131,9 +131,16 @@ void VulkanContext::recordComputePipelineCommandBuffer(uint32_t imageIndex)
         nullptr
     );
 
+    commandBuffer.pushConstants<Camera>(
+        *computePipelineLayout_,
+        vk::ShaderStageFlagBits::eCompute,
+        0,
+        camera
+    );
+
     commandBuffer.dispatch(
-        static_cast<uint32_t>(ceil(800 / 8)),
-        static_cast<uint32_t>(ceil(600 / 8)),\
+        static_cast<uint32_t>(ceil(static_cast<float>(WIDTH) / 16.f)),
+        static_cast<uint32_t>(ceil(static_cast<float>(HEIGHT) / 16.f)),\
         1); //TODO : RAPLACE BY A CONSTANT VAL
 
     // to ePresentSrcKHR
@@ -188,4 +195,15 @@ void VulkanContext::transition_image_layout(
     auto &commandBuffer = commandBuffers_[frameIndex];
 
     commandBuffer.pipelineBarrier2(dependency_info);
+}
+
+void VulkanContext::update(Scene& scene)
+{
+    auto camInfo = scene.getCameraInfo();
+
+    glm::mat4 view = glm::lookAt(camInfo.position, camInfo.position + camInfo.dirForward, camInfo.dirUp);
+    glm::mat4 proj = glm::perspective(camInfo.fovy, ASPECT, 0.1f, 100.f);
+
+    camera.invProjView = inverse(proj * view);
+    camera.position = camInfo.position;
 }
