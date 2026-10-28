@@ -3,7 +3,7 @@
 void PathTracer::run()
 {
     initWindow();
-    vkContext = VulkanContext(window_);
+    vkContext = VulkanContext(window_, assetManager_);
     mainLoop(vkContext);
     cleanup(vkContext);
 }

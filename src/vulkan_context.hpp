@@ -15,10 +15,12 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "constants.hpp"
-#include "geometry/obj_loader.hpp"
 #include "geometry/vk_context_scene_object.hpp"
 #include "geometry/mesh.hpp"
 #include "scene/scene.hpp"
+#include "asset_manager.hpp"
+#include "geometry/vertex.hpp"
+#include "cgltf.h"
 
 #ifdef NDEBUG
 constexpr bool enableValidationLayers = false;
@@ -35,7 +37,7 @@ class VulkanContext
 public:
     VulkanContext() {}
 
-    VulkanContext(GLFWwindow* window);
+    VulkanContext(GLFWwindow* window, AssetManager &assetManager);
 
     enum class PipelineType 
     {
@@ -50,6 +52,7 @@ public:
     void cleanup();
 private:
     GLFWwindow* window_ = nullptr;
+    AssetManager assetManager_;
     vk::raii::Context  context_;             //vulkan.so/vulkan-1.dll loader. Inits ptrs to basic driver functions, which we are going to use
     vk::raii::Instance instance_ = nullptr;  //logic connection between the gpu and the application
     vk::raii::DebugUtilsMessengerEXT debugMessenger_ = nullptr;
@@ -105,6 +108,10 @@ private:
     std::vector<vk::raii::Buffer> indexBuffers_;
     std::vector<vk::raii::DeviceMemory> indexDeviceMemories_;
     std::vector<MeshInfo> meshInfos_;
+
+    std::vector<MeshPassportGPU> meshPassports_;
+    vk::raii::Buffer meshPassportsBuffer_ = nullptr;
+    vk::raii::DeviceMemory meshPassportsMemory_ = nullptr;
 
     
     //####################
@@ -199,7 +206,11 @@ private:
     );
     void createInstances();
 
-    void uploadModel(std::string &name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
+    void uploadAllModels(std::vector<std::string> &filenames);
+
+    void uploadModels(std::string& filename);
+
+    void allocateModelBuffers(std::string &name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices);
 
     void createBuffer(
         vk::DeviceSize size, 

@@ -1,6 +1,6 @@
 #include "vulkan_context.hpp"
 
-VulkanContext::VulkanContext(GLFWwindow* window) : window_(window)
+VulkanContext::VulkanContext(GLFWwindow* window, AssetManager &assetManager) : window_(window), assetManager_(assetManager)
 {   
     createInstance();
     setupDebugMessenger();
@@ -15,6 +15,7 @@ VulkanContext::VulkanContext(GLFWwindow* window) : window_(window)
     createCommandPool();
     createCommandBuffers();
 
+    /*
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
 
@@ -35,6 +36,13 @@ VulkanContext::VulkanContext(GLFWwindow* window) : window_(window)
     std::string model3 = "assets/doom.obj";
     loadObjFile(model3, vertices, indices);
     uploadModel(model3, vertices, indices);
+
+    */
+    std::vector<std::string> modelNames;
+
+    modelNames.emplace_back("assets/base.glb");
+    uploadAllModels(modelNames);
+    
 
     camera.height = HEIGHT;
     camera.width  = WIDTH;
@@ -678,9 +686,21 @@ void VulkanContext::createComputePipeline()
         }
     );
 
+    bindings.emplace_back
+    (
+        vk::DescriptorSetLayoutBinding
+        {
+            .binding            = 2,
+            .descriptorType     = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount    = 1,
+            .stageFlags         = vk::ShaderStageFlagBits::eCompute,
+            .pImmutableSamplers = nullptr
+        }
+    );
+
     vk::DescriptorSetLayoutCreateInfo layoutInfo
     {
-        .bindingCount = 2,
+        .bindingCount = 3,
         .pBindings    = bindings.data()
     };
 
@@ -751,6 +771,15 @@ void VulkanContext::createDescriptorSets()
     (
         vk::DescriptorPoolSize
         {
+            .type            = vk::DescriptorType::eStorageBuffer,
+            .descriptorCount = 3
+        }  
+    );
+
+    poolSizes.emplace_back
+    (
+        vk::DescriptorPoolSize
+        {
             .type            = vk::DescriptorType::eAccelerationStructureKHR,
             .descriptorCount = 3
         }  
@@ -759,7 +788,7 @@ void VulkanContext::createDescriptorSets()
     vk::DescriptorPoolCreateInfo poolInfo{
         .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
         .maxSets       = 3,
-        .poolSizeCount = 2,
+        .poolSizeCount = 3,
         .pPoolSizes    = poolSizes.data()
     };
     descriptorPool_ = vk::raii::DescriptorPool(logicalDevice_, poolInfo);
@@ -780,7 +809,8 @@ void VulkanContext::createDescriptorSets()
             .pAccelerationStructures    = &*tlasHandle_
         };
 
-        vk::WriteDescriptorSet tlasWrite{
+        vk::WriteDescriptorSet tlasWrite
+        {
             .pNext           = &asInfo,
             .dstSet          = *descriptorSets_[i],
             .dstBinding      = 0,
@@ -789,14 +819,16 @@ void VulkanContext::createDescriptorSets()
             .descriptorType  = vk::DescriptorType::eAccelerationStructureKHR
         };
 
-        vk::DescriptorImageInfo imageInfo{
+        vk::DescriptorImageInfo imageInfo
+        {
             .sampler     = nullptr,
             .imageView   = *storageImageViews_[i],
             .imageLayout = vk::ImageLayout::eGeneral
         };
 
 
-        vk::WriteDescriptorSet storageImageWrite{
+        vk::WriteDescriptorSet storageImageWrite
+        {
             .dstSet          = *descriptorSets_[i],
             .dstBinding      = 1,
             .dstArrayElement = 0,
@@ -805,7 +837,23 @@ void VulkanContext::createDescriptorSets()
             .pImageInfo      = &imageInfo 
         };
 
-        vk::WriteDescriptorSet writes[] = { tlasWrite, storageImageWrite };
+        vk::DescriptorBufferInfo meshPassportsBufferInfo
+        {
+            .buffer = *meshPassportsBuffer_,
+            .offset = 0,
+            .range = VK_WHOLE_SIZE
+        };
+
+        vk::WriteDescriptorSet passportsWrite{
+            .dstSet          = *descriptorSets_[i],
+            .dstBinding      = 2,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType  = vk::DescriptorType::eStorageBuffer,
+            .pBufferInfo     = &meshPassportsBufferInfo
+        };
+
+        vk::WriteDescriptorSet writes[] = { tlasWrite, storageImageWrite, passportsWrite };
 
         logicalDevice_.updateDescriptorSets(writes, nullptr);
     }

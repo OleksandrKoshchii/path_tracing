@@ -3,6 +3,12 @@
 #include <string>
 #include <cstdint>
 
+struct MeshPassportGPU
+{
+    uint64_t vertexAddress;
+    uint64_t indexAddress;
+};
+
 struct MeshInfo
 {
     std::string name;

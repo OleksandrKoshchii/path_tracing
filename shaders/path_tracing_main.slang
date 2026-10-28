@@ -4,18 +4,8 @@
 // SLOT 1: swapchain image
 [[vk::binding(1, 0)]] RWTexture2D<float4> storageImage;
 
-float3x3 createRotationMatrixY(float angle)
-{
-    float s, c;
-    sincos(angle, s, c);
-
-    return float3x3(
-         c,   0.0f,    s,
-       0.0f,  1.0f,  0.0f,
-        -s,   0.0f,    c
-    );
-}
-
+// SLOT 2: scene meshes attributes
+[[vk::binding(2, 0)]] StructuredBuffer<MeshPassportGPU> sceneMeshes;
 
 [[vk::push_constant]]
 ConstantBuffer<Camera> pushData;
@@ -26,6 +16,19 @@ struct Camera
     float3 position;
     float width;
     float height;
+};
+
+struct MeshPassportGPU
+{
+    uint64_t vertexAddress;
+    uint64_t indexAddress;
+};
+
+struct Vertex
+{
+    float3 pos;
+    float3 normal;
+    float2 uv;
 };
 
 
@@ -65,17 +68,44 @@ void main(uint3 globalID : SV_DispatchThreadID)
 
     if (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
     {
-        float distance = sq.CommittedRayT();
+        uint meshIndex = sq.CommittedInstanceID();
+        uint primitiveIndex = sq.CommittedPrimitiveIndex();
 
-        float kc = 1.0f;
-        float kl = 0.1f;
-        float kq = 0.01f;
+        MeshPassportGPU passport = sceneMeshes[meshIndex];
 
-        float attenuation = 1.0f / (kc + kl * distance + kq * distance * distance);
+        Vertex*   vertexArray = (Vertex*)passport.vertexAddress;
+        uint32_t* indexArray  = (uint32_t*)passport.indexAddress;        
 
-        float4 color = float4(1.0f, 0.0f, 0.0f, 1.0f) * attenuation;
+        uint i0 = indexArray[primitiveIndex * 3 + 0];
+        uint i1 = indexArray[primitiveIndex * 3 + 1];
+        uint i2 = indexArray[primitiveIndex * 3 + 2];
 
-        storageImage[uint2(x, y)] = color;
+        Vertex v0 = vertexArray[i0];
+        Vertex v1 = vertexArray[i1];
+        Vertex v2 = vertexArray[i2];
+
+        float2 bary = sq.CommittedTriangleBarycentrics();
+
+        float3 objNormal = v0.normal * (1.0f - bary.x - bary.y) + v1.normal * bary.x + v2.normal * bary.y;
+
+        // 2. Достаем аппаратную матрицу инстанса из RayQuery
+        float3x4 objectToWorld = sq.CommittedObjectToWorld3x4();
+
+        // 3. 💎 ИСПРАВЛЕНО: Кастуем float3x4 в квадратную float3x3 (отбрасываем позицию) 
+        // и честно умножаем локальную нормаль на матрицу поворота объекта!
+        float3 worldNormal = mul((float3x3)objectToWorld, objNormal);
+
+        // 4. Финальная нормализация мирового вектора нормали
+        worldNormal = normalize(worldNormal);
+
+        // 5. Расчет честного объемного освещения «в лоб» (как вы и хотели — свет из камеры)
+        // Вектор -rayDir летит строго из точки попадания обратно в глаз камеры
+        float diff = max(dot(worldNormal, -rayDir), 0.1f);
+
+        // Запись результата
+        float3 finalColor = float3(0.7f, 0.7f, 0.7f) * diff;
+        storageImage[uint2(x, y)] = float4(finalColor, 1.0f);
+
     }
     else
     {

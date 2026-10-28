@@ -6,4 +6,5 @@ struct alignas(32) Vertex
 {
     glm::vec3 pos;
     glm::vec3 n;
+    glm::vec2 uv;
 };

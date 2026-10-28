@@ -17,9 +17,9 @@
 
 #include "constants.hpp"
 #include "vulkan_context.hpp"
-#include "geometry/obj_loader.hpp"
 #include "scene/scene.hpp"
 #include "input_info.hpp"
+#include "asset_manager.hpp"
 
 class PathTracer 
 {
@@ -29,6 +29,7 @@ private:
     GLFWwindow* window_ = nullptr;
     VulkanContext vkContext;
     Scene scene;
+    AssetManager assetManager_;
     InputInfo inputInfo;
 
 	void initWindow();

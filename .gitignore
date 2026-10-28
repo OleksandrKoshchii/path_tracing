@@ -2,4 +2,6 @@ glfw/
 build/
 .vscode/
 assets/
+cgltf.h
+cgltf.cpp
 tiny_obj_loader.h

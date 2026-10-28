@@ -136,7 +136,7 @@ void VulkanContext::createInstances()
 void VulkanContext::createSceneObjects()
 {
     //TODO : parsing a JSON
-
+/*
     sceneObjects_.emplace_back
     (
         vkContextSceneObject
@@ -163,7 +163,23 @@ void VulkanContext::createSceneObjects()
             modelNameToBlasIndex_[std::string("assets/doom.obj")]
         }
     );
-
+*/
+    sceneObjects_.emplace_back
+    (
+        vkContextSceneObject
+        {
+            glm::mat4(1.0f),
+            modelNameToBlasIndex_[std::string("Sphere")]
+        }
+    );
+     sceneObjects_.emplace_back
+    (
+        vkContextSceneObject
+        {
+            glm::mat4(1.0f),
+            modelNameToBlasIndex_[std::string("Cube")]
+        }
+    );   
 }
 
 void VulkanContext::createBLASes()
@@ -307,7 +323,7 @@ void VulkanContext::createBLAS(
     cmd.buildAccelerationStructuresKHR({ blasBuildGeometryInfo }, { &blasRangeInfo });
 }
 
-void VulkanContext::uploadModel(std::string &name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
+void VulkanContext::allocateModelBuffers(std::string &name, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices)
 {
     vk::DeviceSize vertexSize = sizeof(Vertex) * vertices.size();
     vk::DeviceSize indexSize  = sizeof(uint32_t) * indices.size();
@@ -371,11 +387,30 @@ void VulkanContext::uploadModel(std::string &name, const std::vector<Vertex>& ve
         .primitiveCount = static_cast<uint32_t>(indices.size() / 3)
     };
 
+
+    vk::BufferDeviceAddressInfo addrVertBufferInfo{
+        .buffer = *vertexBufferTemp
+    };
+    vk::DeviceAddress vertexBufferAddress = logicalDevice_.getBufferAddress(addrVertBufferInfo);
+
+    vk::BufferDeviceAddressInfo addrIndBufferInfo{
+        .buffer = *indexBufferTemp
+    };
+    vk::DeviceAddress indexBufferAddress = logicalDevice_.getBufferAddress(addrIndBufferInfo);
+
+
+    struct MeshPassportGPU pass
+    {
+        .vertexAddress = vertexBufferAddress,
+        .indexAddress  = indexBufferAddress
+    };
+
     vertexBuffers_.push_back(std::move(vertexBufferTemp));
     vertexDeviceMemories_.push_back(std::move(vertexBufferMemoryTemp));
     indexBuffers_.push_back(std::move(indexBufferTemp));
     indexDeviceMemories_.push_back(std::move(indexBufferMemoryTemp));
     meshInfos_.push_back(meshInfo);
+    meshPassports_.push_back(pass);
 
     std::cout << "Data transferred to Device Local VRAM successfully." << std::endl;
 }
